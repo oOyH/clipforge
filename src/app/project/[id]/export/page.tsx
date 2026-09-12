@@ -14,7 +14,7 @@ import { useT, useLocale } from "@/lib/i18n";
 import { ProjectHeader } from "@/components/project-header";
 import { PerformanceFeedback } from "@/components/performance-feedback";
 
-// platform export config (planned feature, for display). name uses an i18n key (nameKey) resolved to the translated text at render time
+// Platform export targets. Names use i18n keys so the same real export contract is shown in both locales.
 const platformConfigs = [
   { id: "douyin", nameKey: "platformDouyin", ratio: "9:16", resolution: "1080p", subtitle: "居中+描边", color: "from-pink-500 to-red-500" },
   { id: "kuaishou", nameKey: "platformKuaishou", ratio: "9:16", resolution: "1080p", subtitle: "贴边框", color: "from-orange-500 to-amber-500" },
@@ -394,6 +394,7 @@ export default function ExportPage() {
 
   // multi-platform export state: platformId → { status, url, report }
   const [platformExports, setPlatformExports] = useState<Record<string, { status: "idle" | "exporting" | "done" | "error"; url?: string; report?: { withinCap: boolean; message: { zh: string; en: string } } | null }>>({});
+  const [batchExporting, setBatchExporting] = useState(false);
   const exportPlatform = async (platformId: string) => {
     setPlatformExports((prev) => ({ ...prev, [platformId]: { status: "exporting" } }));
     try {
@@ -405,9 +406,22 @@ export default function ExportPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || t("exportFailed"));
       setPlatformExports((prev) => ({ ...prev, [platformId]: { status: "done", url: data.url, report: data.report ?? null } }));
+      return true;
     } catch (e) {
       setPlatformExports((prev) => ({ ...prev, [platformId]: { status: "error" } }));
       showToast(e instanceof Error ? e.message : t("exportFailed"));
+      return false;
+    }
+  };
+
+  // Run one FFmpeg job at a time so batch export stays usable on laptops and avoids competing for disk bandwidth.
+  const exportAllPlatforms = async () => {
+    if (batchExporting || !composition?.url) return;
+    setBatchExporting(true);
+    try {
+      for (const platform of platformConfigs) await exportPlatform(platform.id);
+    } finally {
+      setBatchExporting(false);
     }
   };
 
@@ -679,6 +693,12 @@ export default function ExportPage() {
               <h3 className="text-sm font-semibold">{t("multiExportTitle")}</h3>
             </div>
             <p className="text-xs text-muted-foreground mb-4">{t("multiExportDesc")}</p>
+            <div className="mb-4 flex justify-end">
+              <Button variant="outline" size="sm" className="text-xs" disabled={batchExporting || !composition?.url} onClick={() => void exportAllPlatforms()}>
+                {batchExporting ? <LuLoaderCircle className="w-3 h-3 mr-1 animate-spin" /> : <LuDownload className="w-3 h-3 mr-1" />}
+                {batchExporting ? t("batchExporting") : t("batchExportAll")}
+              </Button>
+            </div>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               {platformConfigs.map(platform => {
                 const ex = platformExports[platform.id] ?? { status: "idle" as const };

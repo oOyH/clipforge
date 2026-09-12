@@ -8,7 +8,7 @@
  * Usage:
  *   node bin/clipforge.mjs create --topic "在家手冲咖啡" [--duration 25] [--style knowledge]
  *        [--footage auto|image|video] [--voice <id>] [--aspect 9:16|16:9|1:1]
- *        [--quality fast|standard|hd] [--bgm] [--bgm-mood upbeat] [--karaoke] [--caption standard|bold|minimal|karaoke]
+ *        [--quality fast|standard|hd] [--bgm] [--bgm-mood upbeat] [--bgm-volume 5-40] [--audio-stems] [--karaoke] [--caption standard|bold|minimal|karaoke]
  *        [--cta "👇 点击下方下单"] [--json]
  *   node bin/clipforge.mjs compose --project <id> [same compose options]   compose an existing project with script + assets
  *   node bin/clipforge.mjs list                     list projects
@@ -41,6 +41,13 @@ const ASPECT_RATIOS = ["9:16", "16:9", "1:1"];
 const QUALITY_PRESETS = ["fast", "standard", "hd"];
 const BGM_MOODS = ["upbeat", "chill", "energetic", "emotional"];
 const CAPTION_PRESETS = ["standard", "bold", "minimal", "karaoke"]; // caption style presets (mirrors src/lib/caption-presets.ts)
+
+function parseBgmVolume(value) {
+  const raw = Number(value);
+  if (!Number.isFinite(raw)) return null;
+  const normalized = raw > 1 ? raw / 100 : raw;
+  return normalized >= 0.05 && normalized <= 0.4 ? Math.round(normalized * 100) / 100 : null;
+}
 
 /** Read own package version (parent of bin/ is the repo root) */
 function readVersion() {
@@ -91,6 +98,9 @@ export function composeBodyFromFlags(flags) {
   if (QUALITY_PRESETS.includes(flags.quality)) body.renderPreset = flags.quality;
   if (flags.bgm === true) body.freeBgm = true;
   if (BGM_MOODS.includes(flags["bgm-mood"])) body.bgmMood = flags["bgm-mood"];
+  const bgmVolume = parseBgmVolume(flags["bgm-volume"]);
+  if (bgmVolume !== null) body.bgmVolume = bgmVolume;
+  if (flags["audio-stems"] === true) body.exportAudioStems = true;
   if (flags["bgm-duck"] === true) body.bgmDuck = true;
   if (flags.karaoke === true) body.karaoke = true;
   if (CAPTION_PRESETS.includes(flags.caption)) body.captionPreset = flags.caption;
@@ -474,10 +484,12 @@ async function cmdExport(flags) {
   if (!projectId) throw new Error("--project 不能为空");
   const platform = String(flags.platform || "").trim();
   if (!platform) throw new Error("--platform 不能为空（douyin|kuaishou|xiaohongshu|shipinhao|tiktok|reels|shorts）");
-  const res = await api(`/api/project/${projectId}/export-platform`, { method: "POST", body: { platform } });
+  const body = { platform };
+  if (typeof flags.composition === "string" && flags.composition.trim()) body.compositionId = flags.composition.trim();
+  const res = await api(`/api/project/${projectId}/export-platform`, { method: "POST", body });
   step(`${res.platformName} 导出完成（${res.size}）：${res.url}`);
   if (res.report) step(`${res.report.withinCap ? "✓" : "⚠"} ${res.report.message?.zh || ""}`);
-  return { ok: true, projectId, platform, url: res.url, size: res.size, report: res.report };
+  return { ok: true, projectId, compositionId: res.compositionId ?? null, platform, url: res.url, size: res.size, report: res.report };
 }
 
 // QC: run the automated quality check over the latest composed video (black frames / silence / loudness / streams)
@@ -602,8 +614,14 @@ async function cmdGet(flags) {
   const projectId = String(flags.project || "").trim();
   if (!projectId) throw new Error("--project 不能为空");
   const { composition } = await api(`/api/project/${projectId}/compose`);
-  if (!composition) return { ok: true, projectId, status: "none", videoUrl: null };
-  return { ok: true, projectId, status: composition.status, videoUrl: absVideoUrl(composition) };
+  if (!composition) return { ok: true, projectId, status: "none", videoUrl: null, timelineUrl: null };
+  return {
+    ok: true,
+    projectId,
+    status: composition.status,
+    videoUrl: absVideoUrl(composition),
+    timelineUrl: composition.timelineUrl ? `${BASE_URL}${composition.timelineUrl}` : null,
+  };
 }
 
 async function cmdClips(flags) {
@@ -711,7 +729,7 @@ const HELP = `ClipForge CLI · 命令行一句话出片
 用法：
   clipforge create --topic "在家手冲咖啡" [--duration 25] [--style knowledge]
                    [--footage auto|image|video] [--voice <id>] [--aspect 9:16|16:9|1:1]
-                   [--quality fast|standard|hd] [--bgm] [--bgm-mood upbeat] [--karaoke] [--cta "..."] [--json]
+                   [--quality fast|standard|hd] [--bgm] [--bgm-mood upbeat] [--bgm-volume 5-40] [--audio-stems] [--karaoke] [--cta "..."] [--json]
                    [--caption standard|bold|minimal|karaoke]   字幕样式预设(标准底板/重击大字/极简/逐字高亮)
   clipforge product --url "<商品链接>" [--style pain_point|scene|comparison|story|drama|reversal|interview|unboxing|product_pov|talking_head|auto] [--duration 30]
                    [--category beauty|food|home|fashion|tech|other] [--compose 同款成片选项]   贴链接→带货脚本(加 --compose 直接出片)
@@ -724,7 +742,7 @@ const HELP = `ClipForge CLI · 命令行一句话出片
   clipforge cover --project <id> --title "手冲咖啡 三步搞定" [--position center|lower|upper]   生成封面图
   clipforge qr --project <id> [--platform douyin --url <shopUrl> --size 512]   生成商品「扫码购买」二维码(UTM追踪)
   clipforge endcard --project <id> [--platform douyin --seconds 3 --cta "扫码购买"]   把扫码购买二维码烧进成片片尾(需先合成)
-  clipforge export --project <id> --platform douyin|kuaishou|xiaohongshu|shipinhao|tiktok|reels|shorts   按平台导出(码率卡线免二压+实测报告)
+  clipforge export --project <id> --platform douyin|kuaishou|xiaohongshu|shipinhao|tiktok|reels|shorts [--composition <id>]   按平台导出(码率卡线免二压+实测报告)
   clipforge qc --project <id> [--composition <id>]   成片质检(黑屏/静音/响度/流完整性,批量出片前把关)
   clipforge master --project <id> [--composition <id>]   分析切点连续性与响度(默认只读,不调用模型)
                    [--apply --normalize-audio|--deflicker] [--label "投流母版" --no-wait]

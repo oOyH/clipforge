@@ -108,6 +108,8 @@ export const exportPage: NamespaceMessages = {
     // 多平台导出
     multiExportTitle: "多平台导出",
     multiExportDesc: "一键重编码为各平台比例（模糊填充，不裁掉字幕/贴片）",
+    batchExportAll: "一键导出全部平台",
+    batchExporting: "正在依次导出...",
     ratioLabel: "比例: {ratio}",
     resolutionLabel: "分辨率: {resolution}",
     downloadPlatform: "下载{platform}版",
@@ -258,6 +260,8 @@ export const exportPage: NamespaceMessages = {
     feelDownload: "Download video",
     multiExportTitle: "Multi-platform export",
     multiExportDesc: "Re-encode to each platform's aspect ratio in one click (blurred fill, no cropping of subtitles/overlays)",
+    batchExportAll: "Export all platforms",
+    batchExporting: "Exporting one by one...",
     ratioLabel: "Ratio: {ratio}",
     resolutionLabel: "Resolution: {resolution}",
     downloadPlatform: "Download {platform} version",

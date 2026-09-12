@@ -20,9 +20,35 @@ import { buildKaraokeAss } from "@/lib/video-composer/karaoke";
 import { isAudibleFromVolumedetect } from "@/lib/video-composer/audio-probe";
 import { buildComplianceOverlays } from "@/lib/compliance-overlays";
 import { fetchFreeBgm, moodQueryForCategory, moodQueryForMood } from "@/lib/free-bgm";
+import { resolveBgmMix } from "@/lib/audio-mix";
+import { renderAudioStems } from "@/lib/audio-stems";
 import type { Shot, ScriptCharacter } from "@/lib/db/schema";
 import { assignCharacterVoices } from "@/lib/character-voices";
 import { desc, and } from "drizzle-orm";
+
+type ComposeRequestBody = {
+  exportAudioStems?: boolean;
+  voiceoverOverrides?: Array<{ shotId: number; voiceover: string }>;
+  ttsConfig?: TTSConfig;
+  freeTts?: { enabled?: boolean; voice?: string; rate?: string };
+  renderPreset?: unknown;
+  captionPreset?: unknown;
+  resolution?: "720p" | "1080p" | string;
+  aspectRatio?: "9:16" | "16:9" | "1:1" | string;
+  aigcBadge?: boolean;
+  label?: string;
+  ctaText?: string;
+  aigcBadgeText?: string;
+  bgmPath?: string;
+  freeBgm?: boolean;
+  bgmMood?: string;
+  bgmVolume?: number;
+  bgmDuck?: boolean;
+  voiceGround?: boolean;
+  karaoke?: boolean;
+  productCard?: boolean;
+  [key: string]: unknown;
+};
 
 // 获取该项目最新一条合成记录（导出页读取真实成片）
 export async function GET(
@@ -52,11 +78,13 @@ export async function GET(
     const c = rows[0];
     // separator-agnostic: Windows rows store backslash absolute paths (issue #15)
     const fileName = fileNameOf(c.outputPath);
+    const timelineUrl = fileName ? `/api/output/${id}/${encodeURIComponent(`${fileName}.timeline.json`)}` : null;
     return NextResponse.json({
       composition: {
         ...c,
         fileName,
         url: fileName ? `/api/output/${id}/${fileName}` : null,
+        timelineUrl,
       },
     });
   } catch (error) {
@@ -101,7 +129,11 @@ export async function POST(
 ) {
   try {
     const { id } = await params;
-    const body = await req.json().catch(() => ({}));
+    const parsedBody = await req.json().catch(() => null);
+    const body: ComposeRequestBody = parsedBody && typeof parsedBody === "object" && !Array.isArray(parsedBody)
+      ? parsedBody as ComposeRequestBody
+      : {};
+    const exportAudioStems = body.exportAudioStems === true;
     const db = getDb();
 
     // 读取项目（拿商品图兜底）与已选脚本
@@ -277,7 +309,7 @@ export async function POST(
         : "1080p";
     const outputCfg = {
       resolution,
-      aspectRatio: (["9:16", "16:9", "1:1"].includes(body.aspectRatio) ? body.aspectRatio : "9:16") as "9:16" | "16:9" | "1:1",
+      aspectRatio: (typeof body.aspectRatio === "string" && ["9:16", "16:9", "1:1"].includes(body.aspectRatio) ? body.aspectRatio : "9:16") as "9:16" | "16:9" | "1:1",
       videoPreset: profile.videoPreset,
       crf: profile.crf,
     };
@@ -453,12 +485,14 @@ export async function POST(
       }
     }
 
+    const hasVoiceTrack = rendered.some((item) => Boolean(item.clip.audioPath || item.clip.hasAudio));
+    const bgmMix = resolveBgmMix({ volume: body.bgmVolume, duck: body.bgmDuck, hasVoice: hasVoiceTrack });
     const config: ComposeConfig = {
       projectId: id,
       clips,
       output: {
         ...outputCfg,
-        ...(bgmLocal && { bgmPath: bgmLocal, bgmVolume: 0.18, bgmDuck: body.bgmDuck === true }),
+        ...(bgmLocal && { bgmPath: bgmLocal, bgmVolume: bgmMix.volume, bgmDuck: bgmMix.duck }),
         // voice grounding (TTS de-broadcast + room-tone bed) defaults ON in the composer when a
         // TTS track exists; body.voiceGround === false is the explicit opt-out for a clean read
         ...(body.voiceGround === false && { voiceGround: false }),
@@ -499,12 +533,51 @@ export async function POST(
         // Splice-point sidecar (same pattern as the BGM credit sidecar): the composer's actual
         // fade-aware segment boundaries. The smart contact sheet reads this as the authoritative
         // cut list — per-frame scene detection cannot see gradual cross-fades. Best-effort only.
+        const boundaries = segmentBoundaries(rendered.map((r) => ({ duration: r.duration, transition: r.clip.transition })));
+        const starts = [0, ...boundaries];
+        const stemDirName = `stems_${comp.id}`;
+        let renderedStems: { voicePath?: string; bgmPath?: string } = {};
+        if (exportAudioStems) {
+          try {
+            renderedStems = await renderAudioStems({
+              clips: rendered.map((r) => ({ duration: r.duration, transition: r.clip.transition, audioPath: r.clip.audioPath })),
+              bgmPath: bgmLocal,
+              bgmVolume: bgmMix.volume,
+              totalDuration: timeline.total,
+              outputDir: join(getDataDir(), "output", id, stemDirName),
+            });
+          } catch (error) {
+            console.warn("音轨 stem 导出失败（不阻断成片）:", error);
+          }
+        }
+        const dialogueClips = rendered.flatMap((r, index) => r.clip.audioPath ? [{
+          source: fileNameOf(r.clip.audioPath),
+          start: Number((starts[index] ?? 0).toFixed(3)),
+          end: Number(((starts[index] ?? 0) + r.duration).toFixed(3)),
+        }] : []);
+        const nativeClips = rendered.flatMap((r, index) => r.clip.hasAudio && r.clip.type === "video" ? [{
+          source: fileNameOf(r.clip.filePath),
+          start: Number((starts[index] ?? 0).toFixed(3)),
+          end: Number(((starts[index] ?? 0) + r.duration).toFixed(3)),
+        }] : []);
+        const audioTracks = [
+          ...(dialogueClips.length ? [{ id: "A1", role: "dialogue", clips: dialogueClips }] : []),
+          ...(nativeClips.length ? [{ id: "A2", role: "native", clips: nativeClips }] : []),
+          ...(bgmLocal ? [{ id: "A3", role: "bgm", source: fileNameOf(bgmLocal), start: 0, end: Number(timeline.total.toFixed(3)), volume: bgmMix.volume, duck: bgmMix.duck }] : []),
+        ];
         await writeFile(
           `${outputPath}.timeline.json`,
           JSON.stringify({
             version: 1,
-            boundaries: segmentBoundaries(rendered.map((r) => ({ duration: r.duration, transition: r.clip.transition }))),
+            boundaries,
             total: timeline.total,
+            audioTracks,
+            ...(exportAudioStems ? {
+              audioStems: {
+                voiceUrl: renderedStems.voicePath ? `/api/output/${id}/${stemDirName}/voice.wav` : null,
+                bgmUrl: renderedStems.bgmPath ? `/api/output/${id}/${stemDirName}/bgm.wav` : null,
+              },
+            } : {}),
             // structured degradation log (TTS fallbacks / failed shots) — surfaced by tooling later
             ...(composeWarnings.length > 0 ? { warnings: composeWarnings } : {}),
           }),

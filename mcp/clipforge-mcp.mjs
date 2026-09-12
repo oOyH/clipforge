@@ -51,6 +51,8 @@ function composeBody(args) {
   if (QUALITY_PRESETS.includes(args.quality)) body.renderPreset = args.quality;
   if (args.bgm === true) body.freeBgm = true; // automatically add a free CC background music track
   if (["upbeat", "chill", "energetic", "emotional"].includes(args.bgmMood)) body.bgmMood = args.bgmMood; // BGM mood
+  if (Number.isFinite(args.bgmVolume) && args.bgmVolume >= 0.05 && args.bgmVolume <= 0.4) body.bgmVolume = Math.round(args.bgmVolume * 100) / 100; // normalized 0.05-0.4 mix level
+  if (args.audioStems === true) body.exportAudioStems = true; // render editable voice/BGM WAV stems after the main composition
   if (args.bgmDuck === true) body.bgmDuck = true; // voiceover ducking (makes narration clearer)
   if (args.karaoke === true) body.karaoke = true; // karaoke word-by-word captions
   if (CAPTION_PRESETS.includes(args.captionPreset)) body.captionPreset = args.captionPreset; // caption style preset
@@ -106,6 +108,16 @@ const OUTPUT_OPTION_PROPS = {
   bgmDuck: {
     type: "boolean",
     description: "旁白闪避：旁白一响自动压低 BGM、停顿回升，旁白更清晰（需有 BGM）。默认 false",
+  },
+  bgmVolume: {
+    type: "number",
+    minimum: 0.05,
+    maximum: 0.4,
+    description: "背景音乐混音强度，0.05-0.4（默认 0.18）；有旁白时仍会自动闪避",
+  },
+  audioStems: {
+    type: "boolean",
+    description: "额外导出可编辑的旁白和 BGM WAV 音轨；完成后从 composition.timelineUrl sidecar 的 audioStems 读取下载地址；默认 false（会增加一次音频渲染）",
   },
   aiDisclosure: {
     type: "boolean",
@@ -473,12 +485,13 @@ const TOOLS = [
   {
     name: "clipforge_export_platform",
     description:
-      "把某项目最新成片按目标平台规格导出（后处理重编码，不改合成管线）：按平台画幅模糊填充重构图 + 码率卡在平台二压线内（CRF+VBV 双约束，抖音 6000kbps / Reels 5000 / 其余 8000，社区经验值）+ 导出后 ffprobe 实测回读，返回「实测码率 vs 平台线」双语报告（report.withinCap 表示预计可免平台二次压缩变糊）。支持 douyin|kuaishou|xiaohongshu|shipinhao|tiktok|reels|shorts。需先合成过视频。不需要 LLM。",
+      "把某项目成片按目标平台规格导出（后处理重编码，不改合成管线）：按平台画幅模糊填充重构图 + 码率卡在平台二压线内（CRF+VBV 双约束，抖音 6000kbps / Reels 5000 / 其余 8000，社区经验值）+ 导出后 ffprobe 实测回读，返回「实测码率 vs 平台线」双语报告（report.withinCap 表示预计可免平台二次压缩变糊）。默认使用最新一次成功合成；可传 compositionId 固定某次成功合成，便于批量/审计复现。支持 douyin|kuaishou|xiaohongshu|shipinhao|tiktok|reels|shorts。需先合成过视频。不需要 LLM。",
     inputSchema: {
       type: "object",
       properties: {
         projectId: PROJECT_ID_PROP,
         platform: { type: "string", enum: ["douyin", "kuaishou", "xiaohongshu", "shipinhao", "tiktok", "reels", "shorts"], description: "目标平台" },
+        compositionId: { type: "string", description: "指定要导出的成功合成 ID（不填则使用最新一次成功合成）" },
       },
       required: ["projectId", "platform"],
     },
@@ -937,7 +950,13 @@ async function handleGetVideo(args) {
   if (!composition) {
     return ok({ ok: true, projectId, status: "none", videoUrl: null, hint: "该项目还没有合成记录，用 clipforge_compose 出片。" });
   }
-  return ok({ ok: true, projectId, status: composition.status, videoUrl: absVideoUrl(composition) });
+  return ok({
+    ok: true,
+    projectId,
+    status: composition.status,
+    videoUrl: absVideoUrl(composition),
+    timelineUrl: composition.timelineUrl ? `${BASE_URL}${composition.timelineUrl}` : null,
+  });
 }
 
 async function handleIngestProduct(args) {
@@ -1164,8 +1183,10 @@ async function handleExportPlatform(args) {
   if (!projectId) throw new Error("projectId 不能为空");
   const platform = String(args.platform || "").trim();
   if (!platform) throw new Error("platform 不能为空");
-  const res = await api(`/api/project/${projectId}/export-platform`, { method: "POST", body: { platform } });
-  return ok({ ok: true, projectId, platform, platformName: res.platformName, url: res.url, size: res.size, report: res.report ?? null });
+  const body = { platform };
+  if (typeof args.compositionId === "string" && args.compositionId.trim()) body.compositionId = args.compositionId.trim();
+  const res = await api(`/api/project/${projectId}/export-platform`, { method: "POST", body });
+  return ok({ ok: true, projectId, compositionId: res.compositionId ?? null, platform, platformName: res.platformName, url: res.url, size: res.size, report: res.report ?? null });
 }
 
 // Release gate: aggregated pre-publish verdict (script readiness + video QC + asset licenses)

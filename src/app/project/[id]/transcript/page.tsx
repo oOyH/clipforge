@@ -49,6 +49,7 @@ import {
   nextPlayableSourceTime,
   outputDuration,
   removedRangesForPlan,
+  sanitizeTranscriptEditPlan,
   sanitizeTranscriptDocument,
   transcriptWordsToCues,
   type TimeRange,
@@ -148,6 +149,7 @@ export default function TranscriptPage() {
   const t = useT("transcript");
   const locale = useLocale();
   const inputRef = useRef<HTMLInputElement>(null);
+  const planInputRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const clipPreviewRef = useRef<TimeRange | null>(null);
   const workerRef = useRef<Worker | null>(null);
@@ -555,7 +557,9 @@ export default function TranscriptPage() {
     anchor.href = url;
     anchor.download = fileName;
     anchor.click();
-    URL.revokeObjectURL(url);
+    // Let the browser start the download before releasing the blob, especially when
+    // the user requests all three timeline formats in sequence.
+    window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
   }
 
   function exportDraft(format: "srt" | "vtt" | "json") {
@@ -577,30 +581,68 @@ export default function TranscriptPage() {
     downloadText(`${stem}.${format}`, format === "srt" ? "application/x-subrip" : "text/vtt", format === "srt" ? buildSrt(cues) : buildVtt(cues));
   }
 
+  async function importDraft(file: File | undefined) {
+    if (!file || !transcript) return;
+    try {
+      const parsed = JSON.parse(await file.text()) as { plan?: unknown };
+      const rawPlan = parsed && typeof parsed === "object" && "plan" in parsed ? parsed.plan : parsed;
+      if (!rawPlan || typeof rawPlan !== "object" || (rawPlan as { version?: unknown }).version !== 1) {
+        throw new Error(t("draftImportFailed"));
+      }
+      const imported = sanitizeTranscriptEditPlan(rawPlan, new Set(transcript.words.map((word) => word.id)), transcript.duration);
+      commitPlan(imported);
+      setNotice(t("draftImported"));
+    } catch (cause) {
+      console.warn("剪辑计划导入失败:", cause);
+      setError(t("draftImportFailed"));
+    } finally {
+      if (planInputRef.current) planInputRef.current.value = "";
+    }
+  }
+
+  async function downloadTimelineFormat(format: "otio" | "edl" | "csv") {
+    if (!selected || !transcript) return;
+    const response = await fetch(`/api/project/${id}/media/${selected.id}/timeline`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Accept-Language": locale },
+      body: JSON.stringify({ format, plan }),
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({})) as { error?: string };
+      throw new Error(data.error || t("timelineExportFailed"));
+    }
+    const disposition = response.headers.get("content-disposition") ?? "";
+    const encodedName = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+    const fileName = encodedName ? decodeURIComponent(encodedName) : `clipforge-draft.${format}`;
+    const url = URL.createObjectURL(await response.blob());
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = fileName;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  }
+
   async function exportTimelineDraft(format: "otio" | "edl" | "csv") {
     if (!selected || !transcript) return;
     setBusy("export");
     setError("");
     try {
-      const response = await fetch(`/api/project/${id}/media/${selected.id}/timeline`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "Accept-Language": locale },
-        body: JSON.stringify({ format, plan }),
-      });
-      if (!response.ok) {
-        const data = await response.json().catch(() => ({})) as { error?: string };
-        throw new Error(data.error || t("timelineExportFailed"));
-      }
-      const disposition = response.headers.get("content-disposition") ?? "";
-      const encodedName = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
-      const fileName = encodedName ? decodeURIComponent(encodedName) : `clipforge-draft.${format}`;
-      const url = URL.createObjectURL(await response.blob());
-      const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download = fileName;
-      anchor.click();
-      URL.revokeObjectURL(url);
+      await downloadTimelineFormat(format);
       setNotice(t("timelineExported", { format: format.toUpperCase() }));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : t("timelineExportFailed"));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function exportAllTimelineFormats() {
+    if (!selected || !transcript) return;
+    setBusy("export");
+    setError("");
+    try {
+      for (const format of ["otio", "edl", "csv"] as const) await downloadTimelineFormat(format);
+      setNotice(t("timelineExportAllDone"));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : t("timelineExportFailed"));
     } finally {
@@ -844,10 +886,13 @@ export default function TranscriptPage() {
                 <Button variant="outline" size="sm" className="h-11 px-2 text-xs" onClick={() => exportDraft("vtt")}><LuDownload />VTT</Button>
                 <Button variant="outline" size="sm" className="h-11 px-2 text-xs" onClick={() => exportDraft("json")}><LuFileJson2 />JSON</Button>
               </div>
+              <input ref={planInputRef} type="file" accept="application/json,.json" className="hidden" onChange={(event) => void importDraft(event.target.files?.[0])} />
+              <Button variant="ghost" size="sm" className="mt-2 h-10 w-full text-xs" onClick={() => planInputRef.current?.click()}><LuUpload />{t("importPlan")}</Button>
               <div className="mt-4 rounded-xl border border-border/50 bg-background/30 p-3">
                 <h4 className="text-xs font-semibold">{t("timelineExportTitle")}</h4>
                 <p className="mt-1 text-xs leading-5 text-muted-foreground">{t("timelineExportHint")}</p>
-                <div className="mt-3 grid grid-cols-3 gap-2">
+                <Button variant="secondary" size="sm" className="mt-3 h-10 w-full text-xs" disabled={busy === "export"} onClick={() => void exportAllTimelineFormats()}>{busy === "export" ? <LuLoaderCircle className="animate-spin motion-reduce:animate-none" /> : <LuDownload />}{t("timelineExportAll")}</Button>
+                <div className="mt-2 grid grid-cols-3 gap-2">
                   {(["otio", "edl", "csv"] as const).map((format) => <Button key={format} variant="outline" size="sm" className="h-11 px-2 text-xs" disabled={busy === "export"} onClick={() => void exportTimelineDraft(format)}>{busy === "export" ? <LuLoaderCircle className="animate-spin motion-reduce:animate-none" /> : <LuDownload />}{format.toUpperCase()}</Button>)}
                 </div>
               </div>

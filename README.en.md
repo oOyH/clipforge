@@ -77,6 +77,7 @@
 - 🧱 **Triple reliability gate (v0.8.90)**: ① every downloaded asset (stock / AI output / BGM) is decode-validated on landing — truncated CDN streams and error pages saved as fake .mp4 are deleted on the spot with the next candidate picked automatically, and undecodable videos degrade to the product image before compose, so one rotten file can no longer void an entire single-pass render; ② TTS gains transient-failure retries (deterministic key errors fail fast) and a paid-to-free engine fallback so a shot is never silent, with degradations logged into the output's timeline sidecar; ③ reasoning-model `<think>` residue is scrubbed at every LLM parse point (known endpoints also disable thinking request-side and get JSON mode), and an unparseable reply is echoed back to the model with the error for one repair round — script generation, the judge panel, semantic footage matching and translation all benefit.
 - 🧩 **Infinite Canvas**: [canvas plugin](integrations/infinite-canvas/) — product images in, finished video back as a canvas node for further remixing.
 - 🚦 **Compliance**: explicit + implicit AIGC labeling, ad-law banned-term scan, publish-gate report — all on by default.
+- 🎚️ **Editing handoff upgrade (v0.9.5)**: adjustable BGM level and voice ducking; transcript edit plans now support JSON import, batch OTIO/EDL/CSV export, rhythm markers and an editable caption track; composition sidecars expose A1/A2/A3 audio mappings with optional dialogue/BGM WAV stems; CLI/MCP can pin platform exports to a specific composition and carry audio options through.
 - 🩹 **Fix (v0.8.94)**: Atlas Cloud one-key onboarding wrote the media gateway `/api/v1` into the script-model endpoint while chat lives on `/v1`, so every script generation 404'd and the error blamed the model name (issue #24). One-key now writes the chat gateway, existing settings are repaired on upgrade, a hand-typed media base is corrected before the request, and the key-connectivity test hits the chat gateway so a valid key no longer reads as "cannot determine".
 
 </details>
@@ -570,11 +571,16 @@ pnpm dist       # .dmg installer
 - ✅ **Scale & growth**: batch rendering / viral templates & remix / A/B variants / data flywheel (feed real conversion numbers back into script generation) / trending topics / cover images / Xiaohongshu card decks / preview GIFs / shop-link QR with UTM tracking
 - ✅ **Integrations & distribution**: MCP Server (one-sentence video for agents) / CLI / agent Skill / Docker image / Electron desktop app (mac verified; CI-built .dmg/.exe pending) / bilingual UI / CI pipeline
 
-**Planned (real AI editing)**
-- [ ] Auto subtitle ASR (whisper / transformers.js) → burned subtitles
-- [ ] Import existing video to edit + silence-trim
-- [ ] Cut long video into viral clips — available today via [HotClip](https://github.com/xixihhhh/hotclip) by the same author
-- [ ] Digital-human lip-sync (fal.ai Lipsync) / timeline editing
+**Next (deepen the real editing workflow)**
+- ✅ **Local text editing**: import video, transcribe locally in the browser with Transformers.js, remove words or silence, correct captions, import/export edit-plan JSON, download OTIO / EDL / CSV timelines together, and keep the source and history untouched.
+- ✅ **Long-video clip workbench**: search the real transcript and target duration to propose clips, preview before rendering, and cancel, resume, or retry jobs through the same plan in the web UI, CLI, and MCP.
+- ✅ **Cross-platform audio control**: adjust music level, default to ducking under narration, clamp external requests to a safe range, and save the mix in shareable style packs.
+- ✅ **Rhythm markers**: transcript sentence starts are mapped into OTIO markers, EDL notes, and a CSV rhythm column, so a professional editor can align dialogue and music without another transcription pass.
+- ✅ **Editable caption track**: transcript sentences are emitted as an OTIO C1 text track and mirrored in EDL notes and a CSV caption column.
+- ✅ **Audio-track sidecar**: every composition records A1/A2/A3 mappings for dialogue, native audio, and BGM; CLI / MCP can read it through `timelineUrl`, with file names only and no local absolute paths.
+- ✅ **Editable audio stems**: pass `--audio-stems` / `audioStems: true` from CLI or MCP to add downloadable dialogue and BGM WAV stems to the sidecar; disabled by default so ordinary renders keep the same cost.
+- [ ] Multi-track timeline (dialogue / BGM / SFX / captions)
+- [ ] Digital-human lip-sync (fal.ai Lipsync) and finer region-level repairs
 
 ---
 

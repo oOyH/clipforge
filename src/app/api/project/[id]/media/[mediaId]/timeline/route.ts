@@ -4,8 +4,8 @@ import { apiError, errText } from "@/lib/api-error";
 import { getDb } from "@/lib/db";
 import { mediaSources, projects } from "@/lib/db/schema";
 import { probeMedia } from "@/lib/media-probe";
-import { keepRangesForPlan, remapKeptWords, sanitizeTranscriptDocument, sanitizeTranscriptEditPlan } from "@/lib/transcript-editor";
-import { exportTimeline, type TimelineExportFormat } from "@/lib/timeline-export";
+import { keepRangesForPlan, remapKeptWords, sanitizeTranscriptDocument, sanitizeTranscriptEditPlan, sourceTimeToOutputTime } from "@/lib/transcript-editor";
+import { exportTimeline, type TimelineCaptionCue, type TimelineExportFormat } from "@/lib/timeline-export";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -20,7 +20,11 @@ export async function POST(
   const { id, mediaId } = await params;
   if (!SAFE_ID.test(id) || !SAFE_ID.test(mediaId)) return apiError(req, "无效的素材ID", "Invalid media ID", 400);
   try {
-    const body = await req.json() as Record<string, unknown>;
+    const parsed = await req.json().catch(() => null);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return apiError(req, "请求体必须是 JSON 对象", "Request body must be a JSON object", 400);
+    }
+    const body = parsed as Record<string, unknown>;
     const format = typeof body.format === "string" && FORMATS.has(body.format as TimelineExportFormat) ? body.format as TimelineExportFormat : "otio";
     const db = getDb();
     const [[project], [source]] = await Promise.all([
@@ -39,6 +43,28 @@ export async function POST(
       const cjk = words.some((word) => /[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]/.test(word.text));
       return (cjk ? words.map((word) => word.text).join("") : words.map((word) => word.text).join(" ")).slice(0, 2_000);
     });
+    // Preserve sentence starts as record-time rhythm markers so an OTIO/EDL handoff
+    // can be aligned to dialogue and music without another transcription/model pass.
+    const beatMarkers: Array<{ time: number; sourceTime: number; label: string }> = [];
+    const captionCues: TimelineCaptionCue[] = [];
+    let recordCursor = 0;
+    for (const range of keepRanges) {
+      for (const segment of transcript.segments) {
+        if (segment.start < range.start - 0.015 || segment.start > range.end + 0.015) continue;
+        beatMarkers.push({
+          time: recordCursor + Math.max(0, Math.min(segment.start, range.end) - range.start),
+          sourceTime: segment.start,
+          label: segment.text.slice(0, 160),
+        });
+      }
+      recordCursor += range.end - range.start;
+    }
+    for (const segment of transcript.segments) {
+      const time = sourceTimeToOutputTime(segment.start, keepRanges);
+      const endTime = sourceTimeToOutputTime(segment.end, keepRanges);
+      if (time === null || endTime === null || endTime - time < 0.01) continue;
+      captionCues.push({ time, endTime, text: segment.text.slice(0, 2_000) });
+    }
     const result = exportTimeline(format, {
       projectName: project.name,
       sourceName: source.originalName,
@@ -47,6 +73,8 @@ export async function POST(
       hasAudio: source.hasAudio,
       keepRanges,
       clipNotes,
+      captionCues,
+      beatMarkers,
       revision: Number.isInteger(body.revision) && Number(body.revision) > 0 ? Number(body.revision) : null,
     });
     if (body.inline === true) return NextResponse.json(result);

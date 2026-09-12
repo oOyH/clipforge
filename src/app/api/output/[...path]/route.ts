@@ -44,6 +44,8 @@ export async function GET(
     jpg: "image/jpeg",
     jpeg: "image/jpeg",
     png: "image/png",
+    wav: "audio/wav",
+    json: "application/json; charset=utf-8",
   };
 
   // Optional download: when ?download=1 is present, instruct the browser to download the file

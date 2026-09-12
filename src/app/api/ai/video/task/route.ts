@@ -11,7 +11,10 @@ import type { TaskStatusEnum } from "@/lib/providers/types";
 //   wait=false (default): single status check
 //   wait=true: block until the task reaches a terminal state (resume flow)
 export async function POST(req: NextRequest) {
-  const body = await req.json();
+  const body = await req.json().catch(() => null);
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return apiError(req, "请求体必须是 JSON 对象", "Request body must be a JSON object", 400);
+  }
   const { provider: providerName, apiKey, baseUrl, taskId, wait } = body;
 
   if (!providerName || !taskId) {

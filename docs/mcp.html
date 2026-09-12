@@ -113,7 +113,7 @@
 <h2 id="what">一、什么是 ClipForge MCP:把出片流水线变成 agent 工具</h2>
 <p>ClipForge 是开源的 AI 短视频工具(带货为主场景),它把整条「一句话 → 脚本 → 配画面 → 配音字幕 → FFmpeg 合成竖屏成片」流水线通过 <b>MCP(Model Context Protocol)Server</b> 暴露成标准工具——任何 MCP 客户端(<b>Claude Desktop、Claude Code、Cursor</b> 等)注册之后,agent 就能直接调用「视频生成」这个能力,不用你打开任何界面。</p>
 <ul>
-  <li><b>形态</b>:仓库内 <code>mcp/clipforge-mcp.mjs</code>,一个 stdio MCP Server,是 ClipForge HTTP API 的<b>薄封装</b>——复用实例里的全部编排(脚本引擎 / 免费素材 / 免费 Edge TTS / FFmpeg 合成),运行前需先启动一个 ClipForge 实例。也可用 <a href="https://github.com/xixihhhh/clipforge/releases/tag/v0.9.3">Release 附带的 MCP 安装包</a>,通过 <code>npx</code> 接入,无需克隆仓库。</li>
+  <li><b>形态</b>:仓库内 <code>mcp/clipforge-mcp.mjs</code>,一个 stdio MCP Server,是 ClipForge HTTP API 的<b>薄封装</b>——复用实例里的全部编排(脚本引擎 / 免费素材 / 免费 Edge TTS / FFmpeg 合成),运行前需先启动一个 ClipForge 实例。也可用 <a href="https://github.com/xixihhhh/clipforge/releases/tag/v0.9.5">Release 附带的 MCP 安装包</a>,通过 <code>npx</code> 接入,无需克隆仓库。</li>
   <li><b>费用</b>:素材与配音<b>免 Key、¥0</b>;只有「生成脚本」需要一个 OpenAI 兼容 LLM Key(如 DeepSeek,单次约 ¥0.001)。</li>
   <li><b>产出</b>:1080p 竖屏(也可 16:9 / 1:1)无水印 mp4,自带字幕,AIGC 合规标识可开——发布前怎么不踩限流坑,见<a href="feature-compliance.html">AI 视频合规发布指南</a>。</li>
 </ul>

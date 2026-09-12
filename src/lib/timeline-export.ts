@@ -11,7 +11,29 @@ export interface TimelineExportInput {
   hasAudio: boolean;
   keepRanges: TimeRange[];
   clipNotes?: string[];
+  /** Optional record-time caption cues exported as a dedicated editable text track. */
+  captionCues?: TimelineCaptionCue[];
+  /** Optional record-time rhythm markers (for example transcript sentence starts). */
+  beatMarkers?: TimelineBeatMarker[];
   revision?: number | null;
+}
+
+export interface TimelineBeatMarker {
+  /** Position on the exported record timeline, in seconds. */
+  time: number;
+  /** Optional source position, retained for relinking/debugging. */
+  sourceTime?: number;
+  /** Short human-readable marker label. */
+  label?: string;
+}
+
+export interface TimelineCaptionCue {
+  /** Position on the exported record timeline, in seconds. */
+  time: number;
+  /** End position on the exported record timeline, in seconds. */
+  endTime: number;
+  /** Caption text shown by the NLE text generator. */
+  text: string;
 }
 
 export interface TimelineExportResult {
@@ -45,6 +67,46 @@ function timeRange(start: number, duration: number, rate: number) {
     OTIO_SCHEMA: "TimeRange.1",
     duration: rationalTime(duration, rate),
     start_time: rationalTime(start, rate),
+  };
+}
+
+function normalizedBeatMarkers(input: TimelineExportInput, duration: number): TimelineBeatMarker[] {
+  const seen = new Set<string>();
+  return (input.beatMarkers ?? [])
+    .map((marker) => ({
+      time: Math.min(Math.max(Number(marker.time), 0), duration),
+      ...(Number.isFinite(marker.sourceTime) ? { sourceTime: Math.max(0, Number(marker.sourceTime)) } : {}),
+      ...(typeof marker.label === "string" && marker.label.trim() ? { label: marker.label.replace(/[\r\n]+/g, " ").trim().slice(0, 160) } : {}),
+    }))
+    .filter((marker) => Number.isFinite(marker.time))
+    .sort((a, b) => a.time - b.time)
+    .filter((marker) => {
+      const key = `${marker.time.toFixed(3)}|${marker.label ?? ""}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+function normalizedCaptionCues(input: TimelineExportInput, duration: number): TimelineCaptionCue[] {
+  return (input.captionCues ?? [])
+    .map((cue) => ({
+      time: Math.min(Math.max(Number(cue.time), 0), duration),
+      endTime: Math.min(Math.max(Number(cue.endTime), 0), duration),
+      text: typeof cue.text === "string" ? cue.text.replace(/[\r\n]+/g, " ").trim().slice(0, 2_000) : "",
+    }))
+    .filter((cue) => Number.isFinite(cue.time) && Number.isFinite(cue.endTime) && cue.endTime - cue.time >= 0.01 && cue.text)
+    .sort((a, b) => a.time - b.time || a.endTime - b.endTime)
+    .filter((cue, index, all) => index === 0 || cue.time >= all[index - 1].endTime - 0.01);
+}
+
+function otioMarker(marker: TimelineBeatMarker, rate: number) {
+  return {
+    OTIO_SCHEMA: "Marker.1",
+    color: "YELLOW",
+    name: marker.label || "Beat",
+    marked_range: timeRange(marker.time, 0, rate),
+    metadata: { clipforge: { kind: "beat", ...(marker.sourceTime != null && { sourceTimeSeconds: marker.sourceTime }) } },
   };
 }
 
@@ -92,11 +154,56 @@ function otioTrack(kind: "Video" | "Audio", ranges: TimeRange[], input: Timeline
   };
 }
 
+function otioCaptionTrack(cues: TimelineCaptionCue[], rate: number) {
+  const children: unknown[] = [];
+  let cursor = 0;
+  cues.forEach((cue, index) => {
+    if (cue.time > cursor + 0.001) {
+      children.push({
+        OTIO_SCHEMA: "Gap.1",
+        source_range: timeRange(0, cue.time - cursor, rate),
+        name: "Caption gap",
+      });
+    }
+    const duration = cue.endTime - cue.time;
+    children.push({
+      OTIO_SCHEMA: "Clip.1",
+      enabled: true,
+      effects: [],
+      markers: [],
+      media_reference: {
+        OTIO_SCHEMA: "GeneratorReference.1",
+        generator_kind: "Text",
+        parameters: { text: cue.text },
+      },
+      metadata: { clipforge: { role: "caption", sourceTime: cue.time, sourceEndTime: cue.endTime } },
+      name: `Caption ${String(index + 1).padStart(3, "0")}`,
+      source_range: timeRange(0, duration, rate),
+    });
+    cursor = cue.endTime;
+  });
+  return {
+    OTIO_SCHEMA: "Track.1",
+    children,
+    effects: [],
+    kind: "Video",
+    markers: [],
+    enabled: true,
+    metadata: { clipforge: { role: "captions", editable: true } },
+    name: "C1 · Captions",
+    source_range: null,
+  };
+}
+
 export function buildOtioTimeline(input: TimelineExportInput): string {
   const rate = normalizedFrameRate(input.frameRate);
   const ranges = normalizeTimeRanges(input.keepRanges, input.sourceDuration);
-  const tracks = [otioTrack("Video", ranges, input, rate)];
+  const duration = outputDuration(ranges);
+  const beatMarkers = normalizedBeatMarkers(input, duration);
+  const captionCues = normalizedCaptionCues(input, duration);
+  const tracks: unknown[] = [otioTrack("Video", ranges, input, rate)];
   if (input.hasAudio) tracks.push(otioTrack("Audio", ranges, input, rate));
+  if (captionCues.length) tracks.push(otioCaptionTrack(captionCues, rate));
   return JSON.stringify({
     OTIO_SCHEMA: "Timeline.1",
     metadata: {
@@ -105,9 +212,12 @@ export function buildOtioTimeline(input: TimelineExportInput): string {
         pathMode: "relative",
         sourceName: safeSourceName(input.sourceName),
         revision: input.revision ?? null,
+        beatMarkers: beatMarkers.map((marker) => ({ ...marker })),
+        captionCues: captionCues.map((cue) => ({ ...cue })),
       },
     },
     name: input.projectName || "ClipForge edit",
+    markers: beatMarkers.map((marker) => otioMarker(marker, rate)),
     tracks: {
       OTIO_SCHEMA: "Stack.1",
       children: tracks,
@@ -145,6 +255,7 @@ export function secondsToTimecode(seconds: number, frameRate: number): string {
 export function buildCmx3600Edl(input: TimelineExportInput): string {
   const rate = normalizedFrameRate(input.frameRate);
   const ranges = normalizeTimeRanges(input.keepRanges, input.sourceDuration);
+  const captionCues = normalizedCaptionCues(input, outputDuration(ranges));
   let recordCursor = 0;
   const lines = [`TITLE: ${input.projectName || "CLIPFORGE EDIT"}`, "FCM: NON-DROP FRAME", ""];
   ranges.forEach((range, index) => {
@@ -154,9 +265,18 @@ export function buildCmx3600Edl(input: TimelineExportInput): string {
     lines.push(`${event}  AX       ${channel.padEnd(4)} C        ${secondsToTimecode(range.start, rate)} ${secondsToTimecode(range.end, rate)} ${secondsToTimecode(recordCursor, rate)} ${secondsToTimecode(recordCursor + length, rate)}`);
     lines.push(`* FROM CLIP NAME: ${safeSourceName(input.sourceName)}`);
     if (input.clipNotes?.[index]) lines.push(`* TRANSCRIPT: ${input.clipNotes[index].replace(/[\r\n]+/g, " ")}`);
+    const captions = captionCues.filter((cue) => cue.time >= recordCursor - 0.001 && cue.time <= recordCursor + length + 0.001);
+    for (const cue of captions) lines.push(`* CAPTION ${secondsToTimecode(cue.time, rate)}-${secondsToTimecode(cue.endTime, rate)} · ${cue.text}`);
     lines.push(`* CLIPFORGE SOURCE: ${range.start.toFixed(3)} - ${range.end.toFixed(3)} seconds`, "");
     recordCursor += length;
   });
+  const beatMarkers = normalizedBeatMarkers(input, recordCursor);
+  if (beatMarkers.length) {
+    lines.push("* CLIPFORGE RHYTHM MARKERS");
+    for (const marker of beatMarkers) {
+      lines.push(`* BEAT ${secondsToTimecode(marker.time, rate)}${marker.label ? ` · ${marker.label}` : ""}`);
+    }
+  }
   return lines.join("\n");
 }
 
@@ -169,7 +289,9 @@ export function buildTimelineCsv(input: TimelineExportInput): string {
   const rate = normalizedFrameRate(input.frameRate);
   const ranges = normalizeTimeRanges(input.keepRanges, input.sourceDuration);
   let recordCursor = 0;
-  const rows: Array<Array<string | number>> = [["Event", "Source", "Source In", "Source Out", "Record In", "Record Out", "Duration Seconds", "Source In Seconds", "Source Out Seconds", "Transcript"]];
+  const beatMarkers = normalizedBeatMarkers(input, outputDuration(ranges));
+  const captionCues = normalizedCaptionCues(input, outputDuration(ranges));
+  const rows: Array<Array<string | number>> = [["Event", "Source", "Source In", "Source Out", "Record In", "Record Out", "Duration Seconds", "Source In Seconds", "Source Out Seconds", "Transcript", "Rhythm Markers", "Caption Cues"]];
   ranges.forEach((range, index) => {
     const length = range.end - range.start;
     rows.push([
@@ -183,6 +305,14 @@ export function buildTimelineCsv(input: TimelineExportInput): string {
       range.start.toFixed(3),
       range.end.toFixed(3),
       input.clipNotes?.[index] ?? "",
+      beatMarkers
+        .filter((marker) => marker.time >= recordCursor - 0.001 && marker.time <= recordCursor + length + 0.001)
+        .map((marker) => `${secondsToTimecode(marker.time, rate)}${marker.label ? ` ${marker.label}` : ""}`)
+        .join("; "),
+      captionCues
+        .filter((cue) => cue.time >= recordCursor - 0.001 && cue.time <= recordCursor + length + 0.001)
+        .map((cue) => `${secondsToTimecode(cue.time, rate)}-${secondsToTimecode(cue.endTime, rate)} ${cue.text}`)
+        .join("; "),
     ]);
     recordCursor += length;
   });

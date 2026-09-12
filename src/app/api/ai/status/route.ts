@@ -4,7 +4,10 @@ import { apiError, errText } from "@/lib/api-error";
 
 // Query AI task status (image/video generation is asynchronous)
 export async function POST(req: NextRequest) {
-  const body = await req.json();
+  const body = await req.json().catch(() => null);
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return apiError(req, "请求体必须是 JSON 对象", "Request body must be a JSON object", 400);
+  }
   const { provider: providerName, taskId, apiKey, baseUrl } = body;
 
   if (!providerName || !taskId) {

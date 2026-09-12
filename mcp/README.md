@@ -94,7 +94,7 @@ Use the versioned MCP package attached to the GitHub Release with Node.js 18 or 
   "mcpServers": {
     "clipforge": {
       "command": "npx",
-      "args": ["-y", "--package", "https://github.com/xixihhhh/clipforge/releases/download/v0.9.3/clipforge-mcp-0.1.4.tgz", "clipforge-mcp"],
+      "args": ["-y", "--package", "https://github.com/xixihhhh/clipforge/releases/download/v0.9.5/clipforge-mcp-0.1.5.tgz", "clipforge-mcp"],
       "env": {
         "CLIPFORGE_BASE_URL": "http://localhost:3000",
         "CLIPFORGE_LLM_BASE_URL": "https://api.atlascloud.ai/v1",

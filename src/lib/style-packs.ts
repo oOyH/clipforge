@@ -21,6 +21,8 @@ export interface StylePackCompose {
   captionPreset?: CaptionPresetId;
   /** BGM mood, or "none" to turn BGM off */
   bgm?: "none" | "upbeat" | "chill" | "energetic" | "emotional";
+  /** BGM gain, 0.05..0.4; values outside the range are clamped on import. */
+  bgmVolume?: number;
   bgmDuck?: boolean;
   quality?: "fast" | "standard" | "hd";
   aspectRatio?: "9:16" | "16:9" | "1:1";
@@ -68,6 +70,9 @@ export function parseStylePack(jsonText: string): StylePack | null {
   if (caption) compose.captionPreset = caption;
   const bgm = pickEnum(c.bgm, BGM_VALUES);
   if (bgm) compose.bgm = bgm;
+  if (typeof c.bgmVolume === "number" && Number.isFinite(c.bgmVolume)) {
+    compose.bgmVolume = Math.round(Math.min(0.4, Math.max(0.05, c.bgmVolume)) * 100) / 100;
+  }
   if (typeof c.bgmDuck === "boolean") compose.bgmDuck = c.bgmDuck;
   const quality = pickEnum(c.quality, QUALITY_VALUES);
   if (quality) compose.quality = quality;

@@ -59,6 +59,8 @@ interface ComposeConfig {
   captionPreset: "standard" | "bold" | "minimal" | "karaoke";
   /** 旁白闪避：旁白一响自动压低 BGM、停顿回升，旁白更清晰 */
   bgmDuck: boolean;
+  /** 配乐强度（归一化 0..1，后端会再次做安全限制） */
+  bgmVolume: number;
   /** voice grounding: TTS de-broadcast chain + room-tone bed (default on; off = clean studio read) */
   voiceGround: boolean;
 }
@@ -143,7 +145,8 @@ export default function VideoPage() {
     ctaText: "", // 默认空，开启时按当前语言用 ctaPlaceholder 预填（避免英文用户拿到中文默认 CTA）
     productCard: false,
     captionPreset: "standard",
-    bgmDuck: false,
+    bgmDuck: true,
+    bgmVolume: 0.18,
     voiceGround: true,
   });
 
@@ -295,6 +298,7 @@ export default function VideoPage() {
       ...c,
       ...(p.captionPreset && { captionPreset: p.captionPreset }),
       ...(p.bgm && { bgm: p.bgm }),
+      ...(p.bgmVolume !== undefined && { bgmVolume: p.bgmVolume }),
       ...(p.bgmDuck !== undefined && { bgmDuck: p.bgmDuck }),
       ...(p.quality && { renderPreset: p.quality, resolution: RENDER_PRESETS[p.quality].resolution }),
       ...(p.aspectRatio && { aspectRatio: p.aspectRatio }),
@@ -341,6 +345,7 @@ export default function VideoPage() {
       compose: {
         captionPreset: config.captionPreset,
         bgm: config.bgm as StylePack["compose"]["bgm"],
+        bgmVolume: config.bgmVolume,
         bgmDuck: config.bgmDuck,
         quality: config.renderPreset,
         aspectRatio: config.aspectRatio,
@@ -446,6 +451,7 @@ export default function VideoPage() {
             ...(config.ctaEnabled && config.ctaText.trim() && { ctaText: config.ctaText.trim() }),
             ...(config.productCard && { productCard: true }),
             captionPreset: combo.caption,
+            bgmVolume: config.bgmVolume,
             ...(config.bgmDuck && { bgmDuck: true }),
             ...(!config.voiceGround && { voiceGround: false }),
             // uploaded BGM stays fixed across combos; otherwise the mood dimension picks the free track
@@ -513,6 +519,7 @@ export default function VideoPage() {
           ...(config.ctaEnabled && config.ctaText.trim() && { ctaText: config.ctaText.trim() }),
           ...(config.productCard && { productCard: true }),
           ...(config.captionPreset !== "standard" && { captionPreset: config.captionPreset }),
+          bgmVolume: config.bgmVolume,
           ...(config.bgmDuck && { bgmDuck: true }),
           ...(bgm?.path && { bgmPath: bgm.path }),
           ...(!config.voiceGround && { voiceGround: false }),
@@ -814,6 +821,22 @@ export default function VideoPage() {
                     ))}
                   </SelectContent>
                 </Select>
+                <div className="space-y-1.5 pt-1">
+                  <div className="flex items-center justify-between text-xs text-muted-foreground">
+                    <span>{t("bgmVolumeLabel")}</span>
+                    <span className="tabular-nums">{Math.round(config.bgmVolume * 100)}%</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={5}
+                    max={40}
+                    step={1}
+                    value={Math.round(config.bgmVolume * 100)}
+                    onChange={(event) => setConfig((c) => ({ ...c, bgmVolume: Number(event.target.value) / 100 }))}
+                    className="w-full accent-primary"
+                    aria-label={t("bgmVolumeLabel")}
+                  />
+                </div>
                 {/* 旁白闪避：旁白一响压低 BGM、停顿回升，旁白更清晰 */}
                 <div className="flex items-center justify-between pt-1">
                   <span className="text-xs text-muted-foreground">{t("bgmDuckLabel")}</span>

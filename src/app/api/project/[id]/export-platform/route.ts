@@ -32,7 +32,19 @@ export async function POST(
     if (!/^[a-zA-Z0-9-]+$/.test(id)) {
       return apiError(req, "无效的项目ID", "Invalid project ID");
     }
-    const { platform } = await req.json();
+    let body: Record<string, unknown> = {};
+    try {
+      const parsed = await req.json();
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        body = parsed as Record<string, unknown>;
+      }
+    } catch {
+      /* allow the error below to explain the missing platform */
+    }
+    const platform = typeof body.platform === "string" ? body.platform : "";
+    const compositionId = typeof body.compositionId === "string" && /^[a-zA-Z0-9-]+$/.test(body.compositionId)
+      ? body.compositionId
+      : undefined;
     const target = PLATFORM_SIZE[platform];
     if (!target) {
       return apiError(req, "不支持的平台", "Unsupported platform");
@@ -43,10 +55,15 @@ export async function POST(
     const rows = await db
       .select()
       .from(compositions)
-      .where(and(eq(compositions.projectId, id), eq(compositions.status, "done")))
+      .where(
+        compositionId
+          ? and(eq(compositions.projectId, id), eq(compositions.id, compositionId), eq(compositions.status, "done"))
+          : and(eq(compositions.projectId, id), eq(compositions.status, "done"))
+      )
       .orderBy(desc(compositions.createdAt))
       .limit(1);
-    const src = rows[0]?.outputPath;
+    const selectedComposition = rows[0];
+    const src = selectedComposition?.outputPath;
     if (!src || !existsSync(src)) {
       return apiError(req, "还没有成片，请先合成视频", "No composed video yet; please compose the video first");
     }
@@ -82,6 +99,9 @@ export async function POST(
     return NextResponse.json({
       success: true,
       platform,
+      // Return the actual selected version even when the caller asked for "latest".
+      // This makes a default export auditable and lets CLI/MCP pin the exact result.
+      compositionId: selectedComposition?.id ?? null,
       platformName: target.name,
       url: `/api/output/${id}/${fileName}`,
       size: `${w}x${h}`,

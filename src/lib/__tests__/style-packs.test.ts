@@ -50,6 +50,15 @@ describe("style packs", () => {
     expect(pack!.compose).toEqual({}); // every value was invalid → all dropped, pack still applies as a no-op
   });
 
+  it("clamps the shareable BGM level to the safe range", () => {
+    const pack = parseStylePack(JSON.stringify({
+      format: STYLE_PACK_FORMAT,
+      name: "声音配方",
+      compose: { bgmVolume: 2 },
+    }));
+    expect(pack!.compose.bgmVolume).toBe(0.4);
+  });
+
   it("ignores unknown fields (forward compatibility) and clamps long strings", () => {
     const pack = parseStylePack(
       JSON.stringify({
